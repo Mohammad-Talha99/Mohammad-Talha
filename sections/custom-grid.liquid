@@ -1,0 +1,195 @@
+{% comment %} 6-tile grid, each block picks a product. Popup uses vanilla JS. {% endcomment %}
+<section class="ce-grid" data-section-id="{{ section.id }}">
+  <div class="ce-grid__inner">
+    {%- for block in section.blocks -%}
+      {%- assign p = all_products[block.settings.product] -%}
+      <article class="ce-grid__tile" {{ block.shopify_attributes }}>
+        <button class="ce-grid__hotspot"
+                aria-label="Quick view {{ p.title | default: 'product' }}"
+                data-product-handle="{{ p.handle | escape }}"
+                data-open-modal>
+          •
+        </button>
+
+        {%- if p and p.featured_image -%}
+          <img
+            src="{{ p | img_url: '600x' }}"
+            alt="{{ p.title | escape }}"
+            class="ce-grid__img"
+            loading="lazy">
+        {%- else -%}
+          <div class="ce-grid__placeholder">Pick a product</div>
+        {%- endif -%}
+      </article>
+    {%- endfor -%}
+  </div>
+
+  {#-- Modal markup (single instance) --#}
+  <div class="ce-modal" data-modal hidden>
+    <div class="ce-modal__overlay" data-close></div>
+    <div class="ce-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="ce-modal-title">
+      <button class="ce-modal__close" aria-label="Close" data-close>×</button>
+      <div class="ce-modal__body">
+        <h3 id="ce-modal-title" data-p-title></h3>
+        <p class="ce-modal__price" data-p-price></p>
+        <div class="ce-modal__desc" data-p-desc></div>
+
+        <form class="ce-modal__form" data-variant-form>
+          <div data-option-wrap></div>
+          <button class="ce-modal__add" type="submit" disabled data-add>
+            ADD TO CART
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</section>
+
+{% style %}
+.ce-grid__inner{max-width:1200px;margin:0 auto;display:grid;gap:16px;padding:16px;grid-template-columns:repeat(3,1fr);}
+.ce-grid__tile{position:relative;border:1px solid rgba(0,0,0,.06);}
+.ce-grid__img{display:block;width:100%;height:auto;}
+.ce-grid__hotspot{position:absolute;right:10px;top:10px;border:0;background:#fff;border-radius:50%;width:28px;height:28px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.15);}
+.ce-modal[hidden]{display:none;}
+.ce-modal{position:fixed;inset:0;z-index:60;}
+.ce-modal__overlay{position:absolute;inset:0;background:rgba(0,0,0,.45);}
+.ce-modal__dialog{position:relative;background:#fff;max-width:360px;margin:6vh auto;padding:16px;border-radius:6px;}
+.ce-modal__close{position:absolute;right:8px;top:6px;border:0;background:transparent;font-size:24px;cursor:pointer;}
+.ce-modal__price{font-weight:600;margin:.5rem 0;}
+.ce-modal__form{display:grid;gap:10px;}
+.ce-modal__add{border:1px solid currentColor;padding:12px 16px;}
+@media(max-width: 900px){.ce-grid__inner{grid-template-columns:repeat(2,1fr);} }
+@media(max-width: 520px){.ce-grid__inner{grid-template-columns:1fr;} .ce-modal__dialog{margin:10vh 12px;} }
+{% endstyle %}
+
+{% schema %}
+{
+  "name": "Custom Grid (EcomExperts)",
+  "blocks": [
+    { "type": "product", "name": "Tile", "settings": [
+      { "type": "product", "id": "product", "label": "Product" }
+    ] }
+  ],
+  "max_blocks": 6,
+  "presets": [{ "name": "Custom Grid (EcomExperts)", "blocks": [{ "type": "product" }, { "type": "product" }, { "type": "product" }, { "type": "product" }, { "type": "product" }, { "type": "product" }] }]
+}
+{% endschema %}
+
+<script>
+(() => {
+  const sectionEl = document.currentScript.closest('[data-section-id]');
+  if (!sectionEl) return;
+
+  // Utilities
+  const money = (cents) => {
+    if (typeof Shopify !== 'undefined' && Shopify.formatMoney) return Shopify.formatMoney(cents);
+    return (cents/100).toLocaleString(undefined, { style: 'currency', currency: '{{ shop.currency }}' });
+  };
+
+  // Modal refs
+  const modal = sectionEl.querySelector('[data-modal]');
+  const modalTitle = modal.querySelector('[data-p-title]');
+  const modalPrice = modal.querySelector('[data-p-price]');
+  const modalDesc  = modal.querySelector('[data-p-desc]');
+  const optionWrap = modal.querySelector('[data-option-wrap]');
+  const addBtn     = modal.querySelector('[data-add]');
+  const form       = modal.querySelector('[data-variant-form]');
+
+  let currentProduct = null;
+  let currentVariant = null;
+
+  // Open modal handlers
+  sectionEl.querySelectorAll('[data-open-modal]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const handle = btn.getAttribute('data-product-handle');
+      const product = await fetch(`/products/${handle}.js`).then(r => r.json());
+      currentProduct = product;
+
+      // Populate
+      modalTitle.textContent = product.title;
+      modalPrice.textContent = money(product.price || product.variants[0].price);
+      modalDesc.innerHTML = product.description || '';
+      buildOptions(product);
+      addBtn.disabled = !currentVariant;
+
+      modal.hidden = false;
+      modal.querySelector('.ce-modal__dialog').focus();
+    });
+  });
+
+  // Close modal
+  modal.addEventListener('click', (e) => {
+    if (e.target.hasAttribute('data-close')) {
+      modal.hidden = true;
+      form.reset();
+    }
+  });
+
+  function buildOptions(product) {
+    optionWrap.innerHTML = '';
+    // Build a <select> for each option (e.g., Color, Size)
+    product.options.forEach((opt, idx) => {
+      const wrap = document.createElement('label');
+      wrap.textContent = opt.name || `Option ${idx+1}`;
+      const select = document.createElement('select');
+      select.dataset.optionIndex = idx;
+
+      // Unique values for this option
+      const values = Array.from(new Set(product.variants.map(v => v.options[idx])));
+      select.appendChild(new Option('Choose ' + (opt.name || ''), ''));
+      values.forEach(v => select.appendChild(new Option(v, v)));
+      wrap.appendChild(select);
+      optionWrap.appendChild(wrap);
+
+      select.addEventListener('change', updateVariantFromSelections);
+    });
+    currentVariant = null;
+  }
+
+  function updateVariantFromSelections() {
+    const selects = optionWrap.querySelectorAll('select');
+    const chosen = Array.from(selects).map(s => s.value);
+    if (chosen.some(v => !v)) { addBtn.disabled = true; return; }
+
+    const match = currentProduct.variants.find(v =>
+      v.options.every((val, i) => val === chosen[i])
+    );
+    currentVariant = match || null;
+    addBtn.disabled = !currentVariant;
+    if (currentVariant) modalPrice.textContent = money(currentVariant.price);
+  }
+
+  // Add to cart + conditional add of "Soft Winter Jacket"
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!currentVariant) return;
+    addBtn.disabled = true;
+
+    // 1) Add chosen variant
+    await fetch('/cart/add.js', {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'Accept':'application/json' },
+      body: JSON.stringify({ id: currentVariant.id, quantity: 1 })
+    });
+
+    // 2) If variant options include Black + Medium, auto-add Soft Winter Jacket
+    const hasBlackMedium = currentVariant.options.includes('Black') && currentVariant.options.includes('Medium');
+    if (hasBlackMedium) {
+      try {
+        const swj = await fetch('/products/soft-winter-jacket.js').then(r => r.json());
+        const swjVariant = swj.variants.find(v => v.available) || swj.variants[0];
+        await fetch('/cart/add.js', {
+          method: 'POST',
+          headers: { 'Content-Type':'application/json', 'Accept':'application/json' },
+          body: JSON.stringify({ id: swjVariant.id, quantity: 1 })
+        });
+      } catch(e) { console.warn('Soft Winter Jacket not found/added', e); }
+    }
+
+    addBtn.disabled = false;
+    modal.hidden = true;
+    // Optionally show cart drawer if theme supports it:
+    document.documentElement.dispatchEvent(new CustomEvent('cart:refresh'));
+  });
+})();
+</script>
