@@ -13,10 +13,12 @@
 
         {%- if p and p.featured_image -%}
           <img
-            src="{{ p | img_url: '600x' }}"
+            src="{{ p.featured_image | image_url: width:600 }}"
             alt="{{ p.title | escape }}"
             class="ce-grid__img"
-            loading="lazy">
+            loading="lazy"
+            width="600"
+            height="600">
         {%- else -%}
           <div class="ce-grid__placeholder">Pick a product</div>
         {%- endif -%}
